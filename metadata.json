@@ -1,0 +1,5 @@
+{
+  "name": "Sistema VERA: Análisis Criminal",
+  "description": "Una aplicación para implementar la metodología VERA en la investigación psicológica del delito, facilitando el análisis estructurado desde la recopilación de datos hasta la elaboración de hipótesis y la generación de informes.",
+  "requestFramePermissions": []
+}
