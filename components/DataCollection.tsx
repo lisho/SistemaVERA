@@ -43,12 +43,20 @@ const PillarEditor: React.FC<{
     const [editingValue, setEditingValue] = useState('');
     const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
     const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
+    
+    const [generatedProfile, setGeneratedProfile] = useState('');
+    const [isGeneratingProfile, setIsGeneratingProfile] = useState(false);
+    const [profileError, setProfileError] = useState<string | null>(null);
 
     const config = PILLAR_CONFIG[pillar];
     const isVictim = pillar === Pillar.Victim;
     const pillarData = useMemo(() => caseData.data.filter(d => 
         isVictim ? (d.pillar === pillar && d.victimIndex === victimIndex) : d.pillar === pillar
-    ), [caseData.data, pillar, victimIndex, isVictim]);
+    ).sort((a,b) => {
+        const numA = parseInt(a.code.split('-').pop() || '0');
+        const numB = parseInt(b.code.split('-').pop() || '0');
+        return numA - numB;
+    }), [caseData.data, pillar, victimIndex, isVictim]);
 
     const getNextId = () => {
         const existingIds = pillarData.map(d => {
@@ -213,6 +221,51 @@ const PillarEditor: React.FC<{
         updateCase({ ...caseData, data: updatedData });
         handleCancelEdit();
     };
+    
+    const handleGenerateProfile = async () => {
+        if (pillarData.length < 3) {
+            setProfileError("Se necesitan al menos 3 datos para generar un perfil significativo.");
+            return;
+        }
+        setIsGeneratingProfile(true);
+        setProfileError(null);
+        setGeneratedProfile('');
+
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const dataForProfile = pillarData.map(d => `${d.code}: ${d.content}`).join('\n');
+            
+            const prompt = `
+                Eres un psicólogo criminal y analista de perfiles VERA experto.
+                Sintetiza los siguientes datos objetivos sobre una víctima en un perfil psicológico narrativo y coherente.
+                Este perfil debe enfocarse en la personalidad, estilo de vida, relaciones, vulnerabilidades y cualquier patrón de comportamiento relevante.
+                Basa tu análisis única y exclusivamente en los datos proporcionados. No inventes información ni hagas suposiciones que no estén directamente respaldadas por los hechos listados.
+                La salida debe ser un texto redactado en prosa, bien estructurado.
+
+                Datos objetivos:
+                ${dataForProfile}
+            `;
+
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-pro",
+                contents: prompt,
+            });
+            
+            const text = response.text;
+            if (!text) {
+                 const blockReason = response.promptFeedback?.blockReason;
+                 setProfileError(blockReason ? "La generación fue bloqueada por filtros de contenido." : "La respuesta de la IA estaba vacía.");
+                 return;
+            }
+
+            setGeneratedProfile(text);
+        } catch (e) {
+            console.error("Error generating profile:", e);
+            setProfileError("Ocurrió un error al generar el perfil. Por favor, inténtelo de nuevo.");
+        } finally {
+            setIsGeneratingProfile(false);
+        }
+    };
 
     const colorClasses = PILLAR_COLORS[config.color as keyof typeof PILLAR_COLORS];
 
@@ -273,10 +326,33 @@ const PillarEditor: React.FC<{
                 </div>
             </div>
             <div className="mt-6">
-                <div className="flex justify-between items-center mb-2">
+                <div className="flex justify-between items-center mb-4">
                     <h4 className="text-lg font-medium text-gray-800 dark:text-gray-200">Datos Registrados</h4>
-                    {pillarData.length > 0 && <ViewToggle />}
+                     <div className="flex items-center gap-2">
+                        {isVictim && pillarData.length > 0 && (
+                            <button onClick={handleGenerateProfile} disabled={isGeneratingProfile} className="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-3 rounded-md text-sm transition duration-300 disabled:bg-gray-400 flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" /></svg>
+                                {isGeneratingProfile ? 'Generando...' : 'Generar Perfil'}
+                            </button>
+                        )}
+                        {pillarData.length > 0 && <ViewToggle />}
+                    </div>
                 </div>
+                
+                {isVictim && (profileError || generatedProfile || isGeneratingProfile) && (
+                  <div className="mb-6">
+                    {profileError && <p className="text-sm text-red-500 mt-1">{profileError}</p>}
+                    {isGeneratingProfile && <p className="text-sm text-blue-500 italic py-4 text-center">Analizando datos para construir el perfil...</p>}
+                    {generatedProfile && (
+                      <Card className="bg-blue-50 dark:bg-blue-900/40 border-l-4 border-blue-500">
+                        <h5 className="text-md font-semibold text-blue-800 dark:text-blue-200 mb-2">Perfil Psicológico de la Víctima</h5>
+                        <div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap text-sm leading-relaxed font-sans">
+                          {generatedProfile}
+                        </div>
+                      </Card>
+                    )}
+                  </div>
+                )}
 
                 <div className="max-h-80 overflow-y-auto pr-2 -mr-2">
                     {pillarData.length > 0 ? (
@@ -393,7 +469,7 @@ const VictimSelectionPanel: React.FC<{
 
     return (
         <div className="mt-4">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-2 gap-3">
                 {victimIndices.map(index => {
                     const dataCount = caseData.data.filter(d => d.pillar === Pillar.Victim && d.victimIndex === index).length;
                     return (
@@ -438,22 +514,32 @@ const DataCollection: React.FC<DataCollectionProps> = ({ caseData, updateCase })
       const colorClasses = PILLAR_COLORS[config.color as keyof typeof PILLAR_COLORS];
       const isVictimCard = pillar === Pillar.Victim;
 
+      const victimDataCount = useMemo(() => {
+          const victimIndices = new Set(caseData.data.filter(d => d.pillar === Pillar.Victim && d.victimIndex != null).map(d => d.victimIndex));
+          return victimIndices.size;
+      }, [caseData.data]);
+      const victimTotalDataPoints = caseData.data.filter(d => d.pillar === Pillar.Victim).length;
+
       return (
-          <div className={`rounded-lg p-5 shadow-md flex flex-col justify-between transition-all duration-300 border-2 border-transparent ${colorClasses.bg} bg-white dark:bg-gray-800 ${!isVictimCard ? 'hover:border-blue-500 dark:hover:border-blue-400 cursor-pointer' : ''}`} 
-               onClick={!isVictimCard ? () => setModalPillar(pillar) : undefined}>
+          <div className={`rounded-lg p-5 shadow-md flex flex-col justify-between transition-all duration-300 border-2 border-transparent ${colorClasses.bg} bg-white dark:bg-gray-800 ${isVictimCard ? 'lg:col-span-4' : 'lg:col-span-2'}`}>
               <div>
                   <div className={`flex items-center gap-4 ${colorClasses.text}`}>
                       {config.icon}
                       <h3 className="text-2xl font-bold">{config.label}</h3>
                   </div>
-                  {isVictimCard ? (
-                     <VictimSelectionPanel caseData={caseData} onSelectVictim={handleSelectVictim} onAddVictim={handleAddVictim} />
+                   {isVictimCard ? (
+                     <>
+                        <p className="mt-4 text-gray-600 dark:text-gray-300">
+                          {victimDataCount} víctima(s) con {victimTotalDataPoints} datos.
+                        </p>
+                        <VictimSelectionPanel caseData={caseData} onSelectVictim={handleSelectVictim} onAddVictim={handleAddVictim} />
+                     </>
                   ) : (
                      <>
                         <p className="mt-4 text-gray-600 dark:text-gray-300">
                             {`${caseData.data.filter(d => d.pillar === pillar).length} datos registrados.`}
                         </p>
-                        <button className="mt-5 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
+                        <button onClick={() => setModalPillar(pillar)} className="mt-5 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
                             Gestionar
                         </button>
                      </>
@@ -499,10 +585,11 @@ const DataCollection: React.FC<DataCollectionProps> = ({ caseData, updateCase })
   
   return (
     <>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {Object.values(Pillar).map(p => (
-          <PillarCardComponent key={p} pillar={p} />
-        ))}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          <PillarCardComponent pillar={Pillar.Victim} />
+          <PillarCardComponent pillar={Pillar.Scene} />
+          <PillarCardComponent pillar={Pillar.Reconstruction} />
+          <PillarCardComponent pillar={Pillar.Author} />
       </div>
       <PillarModal
         isOpen={!!modalPillar}
